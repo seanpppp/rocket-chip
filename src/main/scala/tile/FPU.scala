@@ -14,6 +14,160 @@ import freechips.rocketchip.rocket.Instructions._
 import freechips.rocketchip.util._
 import freechips.rocketchip.util.property
 
+object InstDecode {
+  val FN_SZ = 33
+  val LAT_SZ = 5
+
+  val operand1:List[(Long, Int, Int, String)] = List( // 1 operand
+    (0x000000800L,  8,  8, "acos"),
+    (0x000800000L,  9,  9, "acosh"),
+    (0x040000800L, 10, 10, "acospi"),
+    (0x000000400L,  8,  8, "asin"),
+    (0x001000000L,  9,  9, "asinh"),
+    (0x040000400L, 10, 10, "asinpi"),
+    (0x000000001L,  8,  8, "atan"),
+    (0x002000000L, 10, 10, "atanh"),
+    (0x040000001L, 11, 11, "atanpi"),
+    (0x010000000L,  4,  4, "cbrt"),
+    (0x000000004L,  2,  2, "ceil"),
+    (0x000001000L, 10, 10, "cos"),
+    (0x000100000L, 10, 10, "cosh"),
+    (0x040001000L,  6,  6, "cospi"),
+    (0x004000000L,  8,  8, "erf"),
+    (0x044000000L,  8,  8, "erfc"),
+    (0x000010000L, 10, 10, "exp"),
+    (0x000080000L, 10, 10, "expm1"),
+    (0x040008000L, 10, 10, "exp10"),
+    (0x000008000L, 10, 10, "exp2"),
+    (0x100000004L,  2,  2, "cfabs"),
+    (0x040000004L,  2,  2, "floor"),
+    (0x080000004L,  2,  2, "fract1"),
+    (0x0c0000004L,  2,  2, "fract2"),
+    (0x180000001L,  2,  2, "frexp1"),
+    (0x1c0000001L,  2,  2, "frexp2"),
+    (0x140000008L,  2,  2, "ilogb"),
+    (0x048000000L, 14, 14, "lgamma"),
+    (0x088000000L,  2,  2, "lgammar2"),
+    (0x000000040L,  8,  8, "ln"),
+    (0x040000020L,  8,  8, "log10"),
+    (0x040000040L,  8,  8, "log1p"),
+    (0x000000020L,  8,  8, "log2"),
+    (0x1c0000002L,  2,  2, "logb"),
+    (0x100000001L,  2,  2, "modf1"),
+    (0x140000001L,  2,  2, "modf2"),
+    (0x100000008L,  2,  2, "nan"),
+    (0x000000200L,  4,  4, "rcp"),
+    (0x100000002L,  2,  2, "rint"),
+    (0x140000002L,  2,  2, "round"),
+    (0x000000100L,  4,  4, "rsqrt"),
+    (0x040080000L, 13, 13, "sigmoid"),
+    (0x000002000L, 10, 10, "sin"),
+    (0x000200000L, 10, 10, "sinh"),
+    (0x040002000L,  6,  6, "sinpi"),
+    (0x000004000L, 15, 15, "tan"),
+    (0x000400000L, 15, 15, "tanh"),
+    (0x040004000L, 12, 12, "tanpi"),
+    (0x008000000L, 18, 18, "tgamma"),
+    (0x180000002L,  2,  2, "trunc"))
+
+  val operand2:List[(Long, Int, Int, String)] = List( // 2 operand
+    (0x000000002L, 10, 10, "atan2"),
+    (0x040000002L, 11, 11, "atan2pi"),
+    (0x0e0000000L,  2,  2, "copysign"),
+    (0x020000000L,  2,  2, "fdim"),
+    (0x000020000L, 12, 12, "fmod"),
+    (0x000040000L,  7,  7, "hypot"),
+    (0x060000000L,  2,  2, "ldexp"),
+    (0x000000008L,  2,  2, "maxmag"),
+    (0x040000008L,  2,  2, "minmag"),
+    (0x0a0000000L,  2,  2, "nextafter"),
+    (0x000000010L, 14, 14, "pow"),
+    (0x080000010L, 14, 14, "pown"),
+    (0x040000010L, 14, 14, "powr"),
+    (0x080020000L, 12, 12, "remainder"),
+    (0x0c0020000L, 12, 12, "remquo"),
+    (0x0c0000010L, 14, 14, "rootn"))
+val maxLatency = (operand1 ++ operand2).map(_._3).max  //max latency
+
+  implicit class LongB(val x:Long) extends AnyVal {def B = BitPat(x.U(FN_SZ.W))} 
+  implicit class IntB(val x:Int) extends AnyVal {def B = BitPat(x.U(LAT_SZ.W))} 
+  implicit class StrB(val x:String) extends AnyVal {def B = BitPat("b"+x)}
+  implicit class IntZ(val x:Int) extends AnyVal {def Z = 0.U(x.W)} 
+
+  // instruction patterns are generated here. 
+  // 1, append it to opcodes and make, which copies the results to various ecoding.h
+  // 2, manually copy SCM match, mask and declare_insn from ecoding.h to riscv-opc.h
+  // 3, manually define DECLARE_INSN and copy SCM DECLARE_INSN to riscv-opc.c  
+  // 4, manually change disasm.cc
+
+  println(operand1.size + " Single precision 1 operand instructions")
+  println(operand2.size + " Single precision 2 operand instructions")
+  println("\n# Append below to rocket-chip/riscv-tools/riscv-opcodes/opcodes and make\n")
+  // generate grey codes
+  def grey(n: Int): List[String] = if (n == 1) List("0","1") else (grey(n-1).map("0"+_) ++ grey(n-1).reverse.map("1"+_))
+  def pi(a:String) = Integer.parseInt(a.filter(x => "01".contains(x)),2)
+
+  val fun = (// drop 2 to avoid overlap with s1
+    (operand1 zip grey(6)         map{case (x,g) => (g,false,"0","0",x._1,x._2,x._4++".s")}) ++
+    // (operand1 zip grey(6)         map{case (x,g) => (g,false,"1","0",x._1,x._2,x._4++".d.s")}) ++
+    // (operand1 zip grey(6)         map{case (x,g) => (g,false,"0","1",x._1,x._3,x._4++".d")}) ++
+    // (operand1 zip grey(6)         map{case (x,g) => (g,false,"1","1",x._1,x._3,x._4++".s.d")}) ++
+    (operand2 zip grey(5).drop(2) map{case (x,g) => (g,true, "0","0",x._1,x._2,x._4++".s")}) // ++
+    // (operand2 zip grey(5).drop(2) map{case (x,g) => (g,true, "1","0",x._1,x._2,x._4++".d.s")}) ++
+    // (operand2 zip grey(5).drop(2) map{case (x,g) => (g,true, "0","1",x._1,x._3,x._4++".d")}) ++
+    // (operand2 zip grey(5).drop(2) map{case (x,g) => (g,true, "1","1",x._1,x._3,x._4++".s.d")})    
+  ) map {
+    // g = bit pattern, op2 = two operand, c = float double convert, d = double precision 
+      case (g,op2,c,dp,fn,lat,name) => 
+      if (op2) {
+        println(name + " rd rs1 rs2 31..27="+pi(g)+" 26..25=" + pi(c+dp) +" rm 6..0=11")     
+        (g + c + dp + "?"*18 + "0001011",op2,c,dp,fn,lat,name)
+      } else {
+        println(name + " rd rs1 31..27="+g(0)+" 26..25="+ pi(c+dp) +" 24..20="+pi(g.substring(1,6))+" rm 6..0=11")
+        ("0000" + g(0) + c + dp + g.substring(1,6) + "?"*13 + "0001011",op2,c,dp,fn,lat,name)
+      }
+    }
+
+  val scmTable :List[(BitPat,List[BitPat])] = (fun map {case (bp,op2,c,dp,fn,lat,name) => bp.B -> 
+    List(N,Y,Y,if (op2) Y else N, N,   N,      N,        S,       S,           N,      N,     N,      N,  N,  N,    Y,   N, fn.B, lat.B)})
+  // ldst,wen,ren1, ren2,       ren3,swap12, swap23, typeTagIn, typeTagOut, fromint, toint, fastpipe,fma,div,sqrt,wflags,vec
+/**
+  fun.foreach{case (bp,op2,c,dp,fn,lat,name) => println(bp + " " + fn.toHexString + " " + lat + " " + name)}
+
+  println("\n# Append below to before {0,0,0,0,0} in rocket-chip/riscv-tools/riscv-gnu-toolchain/riscv-binutils-gdb/opcodes/riscv-opc.c\n") 
+  //{"fsqrt.d",   "D",   "D,S",  MATCH_FSQRT_D | MASK_RM, MASK_FSQRT_D | MASK_RM, match_opcode, 0 },
+  fun.foreach{case (bp,op2,c,dp,fn,lat,name) =>
+    val f = if (dp=="0") "F" else "D"
+    val op = if (op2) "D,S,T" else "D,S"
+    val uname = name.toUpperCase.replace('.','_')
+    println(("{=" +name+ "=, =" +f+ "=, =" +op+ "=, MATCH_" +uname+ " | MASK_RM, MASK_" +uname+ " | MASK_RM, match_opcode, 0},").replace('=','"'))
+    println(("{=" +name+ "=, =" +f+ "=, =" +op+ ",m=, MATCH_" +uname+ ", MASK_" +uname+ ", match_opcode, 0},").replace('=','"'))
+  }
+
+  // println("\n# Insert below into rocket-chip/riscv-tools/riscv-gnu-toolchain/riscv-binutils-gdb/include/opcode/riscv-opc.h\n")
+  // fun.foreach {case (bp,op2,c,dp,fn,lat,name) =>
+  //   val uname = name.toUpperCase.replace('.','_')
+  //   val s = bp.drop(1).replace('?','0') //drop leading 'b'
+  //   val mat = " 0x"+pi(s.take(4)).toHexString+pi(s.drop(4)).toHexString // split string as it can't handle that many
+  //   val mask = if (op2) " 0xfe00007f" else " 0xfff0007f" 
+  //   println("#define MATCH_"+uname+mat)
+  //   println("#define MASK_"+uname+mask)
+  // }
+  // fun.foreach {case (bp,op2,c,dp,fn,lat,name) =>
+  //   val uname = name.toUpperCase.replace('.','_')
+  //   val s = bp.drop(1).replace('?','0') //drop leading 'b'
+  //   val mat = " 0x"+pi(s.take(4)).toHexString+pi(s.drop(4)).toHexString // split string as it can't handle that many
+  //   val mask = if (op2) " 0xfe00007f" else " 0xfff0007f" 
+  //   // DECLARE_INSN(c_sd, MATCH_C_SD, MASK_C_SD)
+  //   println("DECLARE_INSN(" + name.replace('.','_') + ", MATCH_" +uname+ ", MASK_" +uname+ ")")
+  // }
+
+  println("\n# Insert below into rocket-chip/riscv-tools/riscv-isa-sim/spike_main/spike-dasm.cc\n")
+  fun.foreach {case (bp,op2,c,dp,fn,lat,name) => 
+    println("DEFINE_FR"+ (if (!op2) "1" else "") + "TYPE(" + name.replace('.','_') + ");")}
+**/
+}
+
 case class FPUParams(
   minFLen: Int = 32,
   fLen: Int = 64,
@@ -48,6 +202,9 @@ trait HasFPUCtrlSigs {
   val sqrt = Bool()
   val wflags = Bool()
   val vec = Bool()
+  val fn = UInt(width = FN_SZ) /// add two fields
+  val lat = UInt(width = LAT_SZ)
+}
 }
 
 class FPUCtrlSigs extends Bundle with HasFPUCtrlSigs
@@ -61,6 +218,7 @@ class FPUDecoder(implicit p: Parameters) extends FPUModule()(p) {
   private val X2 = BitPat.dontCare(2)
 
   val default =       List(X,X,X,X,X,X,X,X2,X2,X,X,X,X,X,X,X,N)
+  /** delete 
   val h: Array[(BitPat, List[BitPat])] =
     Array(FLH      -> List(Y,Y,N,N,N,X,X,X2,X2,N,N,N,N,N,N,N,N),
           FSH      -> List(Y,N,N,Y,N,Y,X, I, H,N,Y,N,N,N,N,N,N),
@@ -93,38 +251,40 @@ class FPUDecoder(implicit p: Parameters) extends FPUModule()(p) {
           FNMADD_H -> List(N,Y,Y,Y,Y,N,N, H, H,N,N,N,Y,N,N,Y,N),
           FNMSUB_H -> List(N,Y,Y,Y,Y,N,N, H, H,N,N,N,Y,N,N,Y,N),
           FDIV_H   -> List(N,Y,Y,Y,N,N,N, H, H,N,N,N,N,Y,N,Y,N),
-          FSQRT_H  -> List(N,Y,Y,N,N,N,X, H, H,N,N,N,N,N,Y,Y,N))
+          FSQRT_H  -> List(N,Y,Y,N,N,N,X, H, H,N,N,N,N,N,Y,Y,N)) **/
   val f: Array[(BitPat, List[BitPat])] =
-    Array(FLW      -> List(Y,Y,N,N,N,X,X,X2,X2,N,N,N,N,N,N,N,N),
-          FSW      -> List(Y,N,N,Y,N,Y,X, I, S,N,Y,N,N,N,N,N,N),
-          FMV_W_X  -> List(N,Y,N,N,N,X,X, S, I,Y,N,N,N,N,N,N,N),
-          FCVT_S_W -> List(N,Y,N,N,N,X,X, S, S,Y,N,N,N,N,N,Y,N),
-          FCVT_S_WU-> List(N,Y,N,N,N,X,X, S, S,Y,N,N,N,N,N,Y,N),
-          FCVT_S_L -> List(N,Y,N,N,N,X,X, S, S,Y,N,N,N,N,N,Y,N),
-          FCVT_S_LU-> List(N,Y,N,N,N,X,X, S, S,Y,N,N,N,N,N,Y,N),
-          FMV_X_W  -> List(N,N,Y,N,N,N,X, I, S,N,Y,N,N,N,N,N,N),
-          FCLASS_S -> List(N,N,Y,N,N,N,X, S, S,N,Y,N,N,N,N,N,N),
-          FCVT_W_S -> List(N,N,Y,N,N,N,X, S,X2,N,Y,N,N,N,N,Y,N),
-          FCVT_WU_S-> List(N,N,Y,N,N,N,X, S,X2,N,Y,N,N,N,N,Y,N),
-          FCVT_L_S -> List(N,N,Y,N,N,N,X, S,X2,N,Y,N,N,N,N,Y,N),
-          FCVT_LU_S-> List(N,N,Y,N,N,N,X, S,X2,N,Y,N,N,N,N,Y,N),
-          FEQ_S    -> List(N,N,Y,Y,N,N,N, S, S,N,Y,N,N,N,N,Y,N),
-          FLT_S    -> List(N,N,Y,Y,N,N,N, S, S,N,Y,N,N,N,N,Y,N),
-          FLE_S    -> List(N,N,Y,Y,N,N,N, S, S,N,Y,N,N,N,N,Y,N),
-          FSGNJ_S  -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,N,N),
-          FSGNJN_S -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,N,N),
-          FSGNJX_S -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,N,N),
-          FMIN_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,Y,N),
-          FMAX_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,Y,N),
-          FADD_S   -> List(N,Y,Y,Y,N,N,Y, S, S,N,N,N,Y,N,N,Y,N),
-          FSUB_S   -> List(N,Y,Y,Y,N,N,Y, S, S,N,N,N,Y,N,N,Y,N),
-          FMUL_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,N,Y,N,N,Y,N),
-          FMADD_S  -> List(N,Y,Y,Y,Y,N,N, S, S,N,N,N,Y,N,N,Y,N),
-          FMSUB_S  -> List(N,Y,Y,Y,Y,N,N, S, S,N,N,N,Y,N,N,Y,N),
-          FNMADD_S -> List(N,Y,Y,Y,Y,N,N, S, S,N,N,N,Y,N,N,Y,N),
-          FNMSUB_S -> List(N,Y,Y,Y,Y,N,N, S, S,N,N,N,Y,N,N,Y,N),
-          FDIV_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,N,N,Y,N,Y,N),
-          FSQRT_S  -> List(N,Y,Y,N,N,N,X, S, S,N,N,N,N,N,Y,Y,N))
+    Array(FLW      -> List(Y,Y,N,N,N,X,X,X2,X2,N,N,N,N,N,N,N,N, 0x000000000L, 3),
+          FSW      -> List(Y,N,N,Y,N,Y,X, I, S,N,Y,N,N,N,N,N,N, 0x000000000L, 2),
+          FMV_W_X  -> List(N,Y,N,N,N,X,X, S, I,Y,N,N,N,N,N,N,N, 0x000000000L, 2),
+          FCVT_S_W -> List(N,Y,N,N,N,X,X, S, S,Y,N,N,N,N,N,Y,N, 0x000000000L, 2),
+          FCVT_S_WU-> List(N,Y,N,N,N,X,X, S, S,Y,N,N,N,N,N,Y,N, 0x000000000L, 2),
+          FCVT_S_L -> List(N,Y,N,N,N,X,X, S, S,Y,N,N,N,N,N,Y,N, 0x000000000L, 2),
+          FCVT_S_LU-> List(N,Y,N,N,N,X,X, S, S,Y,N,N,N,N,N,Y,N, 0x000000000L, 2),
+          FMV_X_W  -> List(N,N,Y,N,N,N,X, I, S,N,Y,N,N,N,N,N,N, 0x000000000L, 2),
+          FCLASS_S -> List(N,N,Y,N,N,N,X, S, S,N,Y,N,N,N,N,N,N, 0x000000000L, 2),
+          FCVT_W_S -> List(N,N,Y,N,N,N,X, S,X2,N,Y,N,N,N,N,Y,N, 0x000000000L, 2),
+          FCVT_WU_S-> List(N,N,Y,N,N,N,X, S,X2,N,Y,N,N,N,N,Y,N, 0x000000000L, 2),
+          FCVT_L_S -> List(N,N,Y,N,N,N,X, S,X2,N,Y,N,N,N,N,Y,N, 0x000000000L, 2),
+          FCVT_LU_S-> List(N,N,Y,N,N,N,X, S,X2,N,Y,N,N,N,N,Y,N, 0x000000000L, 2),
+          FEQ_S    -> List(N,N,Y,Y,N,N,N, S, S,N,Y,N,N,N,N,Y,N, 0x000000000L, 2),
+          FLT_S    -> List(N,N,Y,Y,N,N,N, S, S,N,Y,N,N,N,N,Y,N, 0x000000000L, 2),
+          FLE_S    -> List(N,N,Y,Y,N,N,N, S, S,N,Y,N,N,N,N,Y,N, 0x000000000L, 2),
+          FSGNJ_S  -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,N,N, 0x000000000L, 2),
+          FSGNJN_S -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,N,N, 0x000000000L, 2),
+          FSGNJX_S -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,N,N, 0x000000000L, 2),
+          FMIN_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,Y,N, 0x000000000L, 2),
+          FMAX_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,Y,N,N,N,Y,N, 0x000000000L, 2),
+
+          FADD_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,N,Y,N,N,Y,N, 0x100000010L, 2),
+          FSUB_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,N,Y,N,N,Y,N, 0x140000010L, 2),
+          FMUL_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,N,Y,N,N,Y,N, 0x1e0000020L, 2),
+          FMADD_S  -> List(N,Y,Y,Y,Y,N,N, S, S,N,N,N,Y,N,N,Y,N, 0x100000020L, 3),
+          FMSUB_S  -> List(N,Y,Y,Y,Y,N,N, S, S,N,N,N,Y,N,N,Y,N, 0x180000020L, 3),
+          FNMADD_S -> List(N,Y,Y,Y,Y,N,N, S, S,N,N,N,Y,N,N,Y,N, 0x140000020L, 3),
+          FNMSUB_S -> List(N,Y,Y,Y,Y,N,N, S, S,N,N,N,Y,N,N,Y,N, 0x1c0000020L, 3),
+          FDIV_S   -> List(N,Y,Y,Y,N,N,N, S, S,N,N,N,N,Y,N,Y,N, 0x040020000L, 8),
+          FSQRT_S  -> List(N,Y,Y,N,N,N,X, S, S,N,N,N,N,N,Y,Y,N, 0x000000080L, 4))
+  /** delete
   val d: Array[(BitPat, List[BitPat])] =
     Array(FLD      -> List(Y,Y,N,N,N,X,X,X2,X2,N,N,N,N,N,N,N,N),
           FSD      -> List(Y,N,N,Y,N,Y,X, I, D,N,Y,N,N,N,N,N,N),
@@ -162,13 +322,15 @@ class FPUDecoder(implicit p: Parameters) extends FPUModule()(p) {
     Array(FCVT_H_D -> List(N,Y,Y,N,N,N,X, D, H,N,N,Y,N,N,N,Y,N),
           FCVT_D_H -> List(N,Y,Y,N,N,N,X, H, D,N,N,Y,N,N,N,Y,N))
   val vfmv_f_s: Array[(BitPat, List[BitPat])] =
-    Array(VFMV_F_S -> List(N,Y,N,N,N,N,X,X2,X2,N,N,N,N,N,N,N,Y))
+    Array(VFMV_F_S -> List(N,Y,N,N,N,N,X,X2,X2,N,N,N,N,N,N,N,Y)) **/
 
   val insns = ((minFLen, fLen) match {
-    case (32, 32) => f
+    case (32, 32) => f ++ scmTable /// add scm
+/** delete
     case (16, 32) => h ++ f
     case (32, 64) => f ++ d
     case (16, 64) => h ++ f ++ d ++ fcvt_hd
+**/
     case other => throw new Exception(s"minFLen = ${minFLen} & fLen = ${fLen} is an unsupported configuration")
   }) ++ (if (usingVector) vfmv_f_s else Array[(BitPat, List[BitPat])]())
   val decoder = DecodeLogic(io.inst, default, insns)
@@ -904,11 +1066,29 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
   divSqrt_typeTag := DontCare
   divSqrt_wdata := DontCare
   divSqrt_flags := DontCare
+
+  //<<<<<<<
+class SCM(implicit p: Parameters) extends Module {
+  val io = IO(new Bundle {
+    val in = Input(new Bundle {
+      val to_scm = new FPInput //
+      val fn = UInt(FN_SZ.W)
+    })
+    val out = Output(new FPResult) 
+  })
+
+  val scm = Module(new SCM)
+  scm.io.in :<>= fuInput(None) 
+  scm.io.in.fn := Mux(req_valid && ex_ctrl.scm, ex_ctrl.fn, UInt(0))
+
+  
   // writeback arbitration
   case class Pipe(p: Module, lat: Int, cond: (FPUCtrlSigs) => Bool, res: FPResult)
   val pipes = List(
     Pipe(fpmu, fpmu.latency, (c: FPUCtrlSigs) => c.fastpipe, fpmu.io.out.bits),
     Pipe(ifpu, ifpu.latency, (c: FPUCtrlSigs) => c.fromint, ifpu.io.out.bits),
+    /// add one line
+    Pipe(scm_pipe, cfg.scmLatency, (c: FPUCtrlSigs) => c.scm, scm_pipe.io.res),
     Pipe(sfma, sfma.latency, (c: FPUCtrlSigs) => c.fma && c.typeTagOut === S, sfma.io.out.bits)) ++
     (fLen > 32).option({
           val dfma = Module(new FPUFMAPipe(cfg.dfmaLatency, FType.D))
@@ -939,7 +1119,7 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
 
   val wen = RegInit(0.U((maxLatency-1).W))
   val wbInfo = Reg(Vec(maxLatency-1, new WBInfo))
-  val mem_wen = mem_reg_valid && (mem_ctrl.fma || mem_ctrl.fastpipe || mem_ctrl.fromint)
+  val mem_wen = mem_reg_valid && (mem_ctrl.fma || mem_ctrl.fastpipe || mem_ctrl.fromint || mem_ctrl.scm) /// add scm
   val write_port_busy = RegEnable(mem_wen && (memLatencyMask & latencyMask(ex_ctrl, 1)).orR || (wen & latencyMask(ex_ctrl, 0)).orR, req_valid)
   ccover(mem_reg_valid && write_port_busy, "WB_STRUCTURAL", "structural hazard on writeback")
 
